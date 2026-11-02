@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Наши места</title>
+  
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+    html, body { height: 100dvh; overflow: hidden; background: #0a0a0a; font-family: system-ui, -apple-system, sans-serif; color: #e8e8e8; }
+    
+    /* Глобус и карта */
+    #globe { width: 100vw; height: 100dvh; touch-action: none; }
+    #city-map-container {
+      position: fixed; inset: 0; z-index: 50; background: #0a0a0a;
+      opacity: 0; pointer-events: none; transition: opacity 0.5s ease;
+    }
+    #city-map-container.visible { opacity: 1; pointer-events: auto; }
+    #city-map { width: 100%; height: 100%; background: #1a1a1a; }
+
+    /* ========================================= */
+    /* ЭКРАН БЛОКИРОВКИ (ПАРОЛЬ)                 */
+    /* ========================================= */
+    #lock-screen {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #0a0a0a;
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      transition: opacity 0.6s ease, visibility 0.6s ease;
+    }
+    #lock-screen.unlocked {
+      opacity: 0; visibility: hidden;
+    }
+    
+    .lock-content {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 20px;
+      width: 100%; max-width: 300px;
+      padding: 20px;
+    }
+    
+    .lock-icon {
+      font-size: 40px; margin-bottom: 10px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.8; }
+    }
+
+    #password-input {
+      width: 100%;
+      padding: 14px 20px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 100px;
+      color: #fff;
+      font-size: 16px;
+      text-align: center;
+      outline: none;
+      transition: border-color 0.3s ease;
+    }
+    #password-input:focus {
+      border-color: rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    #unlock-btn {
+      width: 100%;
+      padding: 14px;
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 100px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    #unlock-btn:active {
+      transform: scale(0.96);
+      opacity: 0.8;
+    }
+
+    .error-msg {
+      color: #ff4a4a; font-size: 14px; margin-top: -10px;
+      opacity: 0; transition: opacity 0.3s ease;
+    }
+    .error-msg.visible { opacity: 1; }
+    
+    /* Тряска при неверном пароле */
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-6px); }
+      75% { transform: translateX(6px); }
+    }
+    .shake { animation: shake 0.3s ease; }
+
+    /* Кнопки поверх карты */
+    #back-btn {
+      position: fixed; top: calc(20px + env(safe-area-inset-top)); left: 20px; z-index: 1000;
+      background: rgba(20, 20, 22, 0.9); border: 1px solid rgba(255, 255, 255, 0.2); color: #e8e8e8;
+      padding: 10px 20px; border-radius: 100px; font-size: 14px; backdrop-filter: blur(8px);
+      cursor: pointer; display: none;
+    }
+    #back-btn.visible { display: block; }
+
+    #hint {
+      position: fixed; top: calc(24px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+      font-size: 13px; color: rgba(255, 255, 255, 0.35); letter-spacing: 0.5px; z-index: 5; pointer-events: none;
+      opacity: 1; transition: opacity 1s ease;
+    }
+    #hint.hidden { opacity: 0; }
+
+    /* ВСПЛЫВАЮЩЕЕ ОБЛАКО */
+    .map-popup-bubble {
+      position: absolute; bottom: 20px; left: 50%;
+      transform: translateX(-50%) scale(0); transform-origin: bottom center;
+      width: 260px; background: #141416; border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.1);
+      overflow: hidden; opacity: 0;
+      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+      z-index: 1000;
+    }
+    .map-popup-bubble.active { transform: translateX(-50%) scale(1); opacity: 1; }
+    .map-popup-bubble::after {
+      content: ''; position: absolute; bottom: -8px; left: 50%;
+      transform: translateX(-50%); border-width: 8px 8px 0;
+      border-style: solid; border-color: #141416 transparent transparent transparent;
+    }
+    .bubble-gallery {
+      display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
+      scrollbar-width: none; -webkit-overflow-scrolling: touch; height: 300px;
+    }
+    .bubble-gallery::-webkit-scrollbar { display: none; }
+    .bubble-item { flex: 0 0 100%; scroll-snap-align: start; display: flex; flex-direction: column; }
+    .bubble-item img { width: 100%; height: 190px; object-fit: cover; background: #1a1a1a; }
+    .bubble-text {
+      padding: 12px; font-size: 13px; line-height: 1.4; color: #d0d0d0;
+      text-align: center; display: flex; align-items: center; justify-content: center; flex-grow: 1;
+    }
+    .bubble-close {
+      position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6);
+      border: none; color: #fff; width: 24px; height: 24px; border-radius: 50%;
+      font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10;
+    }
+
+    /* Убираем стандартные стили Leaflet */
+    .leaflet-control-attribution { display: none !important; }
+    .leaflet-popup-content-wrapper { background: transparent !important; box-shadow: none !important; padding: 0 !important; border-radius: 0 !important; }
+    .leaflet-popup-content { margin: 0 !important; width: auto !important; line-height: normal !important; }
+    .leaflet-popup-tip-container { display: none !important; }
+    .leaflet-popup { margin-bottom: 0 !important; }
+  </style>
+</head>
+<body>
+
+  <!-- ⚡ ЭКРАН БЛОКИРОВКИ ⚡ -->
+  <div id="lock-screen">
+    <div class="lock-content">
+      <div class="lock-icon">🔒</div>
+      <input type="password" id="password-input" placeholder="Введи пароль..." autocomplete="off">
+      <p class="error-msg" id="error-msg">Неверный пароль</p>
+      <button id="unlock-btn">Открыть</button>
+    </div>
+  </div>
+
+  <!-- Основной контент -->
+  <div id="globe"></div>
+  <div id="hint">нажми на точку</div>
+
+  <div id="city-map-container">
+    <div id="city-map"></div>
+  </div>
+
+  <button id="back-btn">← назад</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/core-globe/dist/core-globe.umd.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // ==========================================
+    // ⚡ НАСТРОЙКА ПАРОЛЯ ⚡
+    // ==========================================
+    const SECRET_PASSWORD = '281126'; // <-- ПОМЕНЯЙ ЗДЕСЬ НА СВОЙ ПАРОЛЬ (латиницей или кириллицей)
+    
+    // Проверяем, входила ли она уже (чтобы не спрашивать пароль при обновлении страницы)
+    const isUnlocked = localStorage.getItem('site_unlocked');
+
+    if (isUnlocked === 'true') {
+      document.getElementById('lock-screen').classList.add('unlocked');
+    }
+
+    // Логика проверки пароля
+    const input = document.getElementById('password-input');
+    const unlockBtn = document.getElementById('unlock-btn');
+    const errorMsg = document.getElementById('error-msg');
+    const lockScreen = document.getElementById('lock-screen');
+
+    function checkPassword() {
+      if (input.value.trim() === SECRET_PASSWORD) {
+        lockScreen.classList.add('unlocked');
+        localStorage.setItem('site_unlocked', 'true'); // Запоминаем, что пароль введен
+      } else {
+        errorMsg.classList.add('visible');
+        input.parentElement.classList.add('shake');
+        setTimeout(() => input.parentElement.classList.remove('shake'), 300);
+        input.value = '';
+      }
+    }
+
+    unlockBtn.addEventListener('click', checkPassword);
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') checkPassword();
+    });
+    input.addEventListener('input', () => {
+      errorMsg.classList.remove('visible'); // Убираем ошибку при вводе
+    });
+
+    // ==========================================
+    // ОСНОВНОЙ КОД (ГЛОБУС И КАРТЫ)
+    // ==========================================
+    const CITIES = [
+      { id: 'moscow', lat: 55.7558, lng: 37.6173, name: 'Москва' },
+      { id: 'ekb', lat: 56.8389, lng: 60.6057, name: 'Екатеринбург' }
+    ];
+
+    const CITY_PLACES = {
+      moscow: [
+        { 
+          lat: 55.7544904663608, lng: 37.61889364153487, 
+          gallery: [
+            { img: 'assets/mov_kr_pl_1.jpg', text: 'Первая фотка в москве, тогда мы приехали уставшие и поехали на красную площадь. Помню ты чуть не засыпала в такси ахпхпаапх' }
+          ]
+        },
+        { 
+          lat: 55.823706565883256, lng: 37.642234830342304, 
+          gallery: [
+            { img: 'assets/mov_vdnh_1.jpg', text: 'Филвалпа почти пришла на вднх' }
+          ]
+        },
+        { 
+          lat: 55.82565480883707, lng: 37.638092073871015, 
+          gallery: [
+            { img: 'assets/mov_vdnh_2.jpg', text: 'Филвалпа стоит перед вднх' },
+            { img: 'assets/mov_vdnh_3.jpg', text: 'С любимой селфи на фоне места где мы пробудем ближайшие четыре дня' }
+          ]
+        },
+        { 
+          lat: 55.82644130147896, lng: 37.63778492754351, 
+          gallery: [
+            { img: 'assets/mov_vdnh_4.jpg', text: 'Такое загадочное фото ахппаххпа' },
+            { img: 'assets/mov_vdnh_5.jpg', text: 'Солнце слепит походу' }
+          ]
+        },
+        { 
+          lat: 55.83278059826401, lng: 37.6203914928087, 
+          gallery: [
+            { img: 'assets/mov_akva_1.jpg', text: 'Радостная любимость перед походом в москвариум' },
+          ]
+        },
+        { 
+          lat: 55.83301496926073, lng: 37.618663823483004, 
+          gallery: [
+            { img: 'assets/mov_akva_2.jpg', text: 'Рыбность' },
+            { img: 'assets/mov_akva_3.jpg', text: 'Капибарность' },
+            { img: 'assets/mov_akva_4.jpg', text: 'Тупость' },
+            { img: 'assets/mov_akva_5.jpg', text: 'Звездность' },
+            { img: 'assets/mov_akva_6.jpg', text: 'Мы' },
+            { img: 'assets/mov_akva_7.jpg', text: 'Ой что то непонятное' },
+            { img: 'assets/mov_akva_8.jpg', text: 'ХАПХ фуу' },
+            { img: 'assets/mov_akva_9.jpg', text: 'Ультратупость' },
+            { img: 'assets/mov_akva_10.jpg', text: 'Касаткость' },
+            { img: 'assets/mov_akva_11.jpg', text: 'Наш пацык' },
+            { img: 'assets/mov_akva_12.jpg', text: 'Тюленность' },
+            { img: 'assets/mov_akva_13.jpg', text: 'Макан' },
+          ]
+        },
+        { 
+          lat: 55.840340113605734, lng: 37.625036161485355, 
+          gallery: [
+            { img: 'assets/mov_vdnh_6.jpg', text: 'Тут скрытая съемка любимости' },
+            { img: 'assets/mov_vdnh_7.jpg', text: 'Как же она скрывается' },
+            { img: 'assets/mov_vdnh_8.jpg', text: 'Хапхапхх скрылась' }
+          ]
+        },
+        { 
+          lat: 55.82643026728793, lng: 37.62762945193802, 
+          gallery: [
+            { img: 'assets/mov_vdnh_kol_1.jpg', text: 'Тут мы только вошли в кабинку и ржали с того что у нас нет скамейки' },
+            { img: 'assets/mov_vdnh_kol_2.jpg', text: 'Очень эстетичное фото моей красотки' },
+            { img: 'assets/mov_vdnh_kol_3.jpg', text: 'АПХАХП щас мешок порвешь' },
+            { img: 'assets/mov_vdnh_kol_4.jpg', text: 'Честно тогда я прям в шоке с видов был' },
+            { img: 'assets/mov_vdnh_kol_5.jpg', text: 'Мыыыыы на фоне крутой башни' }
+          ]
+        },
+        { 
+          lat: 55.75965490969087, lng: 37.509145445624526, 
+          gallery: [
+            { img: 'assets/mov_mov_city_1.jpg', text: 'Одна из моих любимых фоток' },
+            { img: 'assets/mov_mov_city_2.jpg', text: 'Тогда прошел дождик и мы еле нашли лавку на которую можно сесть, а потом долго сидели и смотрели на розовые облака. Потом когда уже стемнело поехали домой' }
+          ]
+        },
+        { 
+          lat: 55.84461288335609, lng: 37.61463609981845, 
+          gallery: [
+            { img: 'assets/mov_vdnh_jp1.jpg', text: 'Это мы еле как попали в японский сад ахппахап' },
+            { img: 'assets/mov_vdnh_jp2.jpg', text: 'Скрытая съемка японского сталкера' }
+          ]
+        },
+        { 
+          lat: 55.82598997744982, lng: 37.62885573106035, 
+          gallery: [
+            { img: 'assets/mov_vdnh_fut1.jpg', text: 'Ойойой, тут незаконно пронесли бургер и стоим такие типо загадочная парочка' },
+            { img: 'assets/mov_vdnh_fut2.jpg', text: 'Делают вид будто не выпал бургер из кормана только что' },
+            { img: 'assets/mov_vdnh_fut3.jpg', text: 'Одна из моих самых любимых фоток, смотря на нее мне становится тепло, люблю тебя лерочка' },
+            { img: 'assets/mov_vdnh_fut4.jpg', text: 'ХАХАП тут мы  смотрели крутое шоу шаров' },
+            { img: 'assets/mov_vdnh_fut5.jpg', text: 'Романтичное фото под деревом' },
+            { img: 'assets/mov_vdnh_fut6.jpg', text: 'Чья то головушка' },
+            { img: 'assets/mov_vdnh_fut7.jpg', text: 'По моему они с потолка спускались, капец там влажно было' },
+            { img: 'assets/mov_vdnh_fut8.jpg', text: 'ХАПХАПХ' },
+            { img: 'assets/mov_vdnh_fut9.jpg', text: 'Ыаыааыыааы' },
+            { img: 'assets/mov_vdnh_fut10.jpg', text: 'Ыаыаыаыыыыыыыыыаа' },
+            { img: 'assets/mov_vdnh_fut11.jpg', text: 'Забавность' }
+          ]
+        },
+        { 
+          lat: 55.90118020044371, lng: 37.40415906954087, 
+          gallery: [
+            { img: 'assets/mov_himki_mel1.jpg', text: 'Приехали во второй раз в москоу и готовим омурайсу' },
+            { img: 'assets/mov_himki_mel2.jpg', text: 'Тут мы приехали после москоу сити и делаем пиццу' },
+            { img: 'assets/mov_himki_mel3.jpg', text: 'Амамам' },
+            { img: 'assets/mov_himki_mel4.jpg', text: 'Это мы уже утром сделали' }
+          ]
+        },
+        { 
+          lat: 55.764308567885216, lng: 37.59236183095898, 
+          gallery: [
+            { img: 'assets/mov_patriki1.jpg', text: 'Приехали на патриаршие пруды с любимой' },
+            { img: 'assets/mov_patriki2.jpg', text: 'Загадочное фото' },
+            { img: 'assets/mov_patriki3.jpg', text: 'Крутые подростки' },
+            { img: 'assets/mov_patriki4.jpg', text: 'Я с любимой' },
+            { img: 'assets/mov_patriki5.jpg', text: 'Видок на прудик' },
+            { img: 'assets/mov_patriki6.jpg', text: 'Мы счастливые' },
+            { img: 'assets/mov_patriki7.jpg', text: 'Любимости светит в глаза' }
+          ]
+        },
+        { 
+          lat: 55.752600673229225, lng: 37.59753581257569, 
+          gallery: [
+            { img: 'assets/mov_rec1.jpg', text: 'Это наш поход в рекордиум, тут ты бьешь жеско грушу' },
+            { img: 'assets/mov_rec2.jpg', text: 'Тут ты мощно бьешь подушку своим огромным бицепсом' },
+            { img: 'assets/mov_rec3.jpg', text: 'Моя львица' },
+            { img: 'assets/mov_rec4.jpg', text: 'Играем в тетрис' },
+            { img: 'assets/mov_rec5.jpg', text: 'АаАаАаАаАаА' },
+            { img: 'assets/mov_rec6.jpg', text: 'Макс Джордан' }
+          ]
+        },
+        { 
+          lat: 55.752957503894955, lng: 37.59407772325864, 
+          gallery: [
+            { img: 'assets/mov_yakitoria1.jpg', text: 'Это был очень вкусный пацык' },
+            { img: 'assets/mov_yakitoria2.jpg', text: 'Филвалпа ломает палец своей штукой' },
+            { img: 'assets/mov_yakitoria3.jpg', text: 'Вот такой вот недорогой обедик' },
+            { img: 'assets/mov_yakitoria4.jpg', text: 'Тупо мы блин съели пацыка' }
+          ]
+        },
+        { 
+          lat: 55.74495851273318, lng: 37.541117280357184, 
+          gallery: [
+            { img: 'assets/mov_mov_city_3.jpg', text: 'Это мы пошли после якитории далеко далеко гулять до москоу сити' },
+            { img: 'assets/mov_mov_city_4.jpg', text: 'Тут ты забавность' },
+            { img: 'assets/mov_mov_city_5.jpg', text: 'Тут я подглядываю за тобой' },
+            { img: 'assets/mov_mov_city_6.jpg', text: 'Тут мы видимо что то выясняем, наверно то как надо фоткать правильно хапхапхпа' },
+            { img: 'assets/mov_mov_city_7.jpg', text: 'Одна из моих любимых фоток, она у меня на обоях стоит' }
+          ]
+        },
+        { 
+          lat: 55.6944259411066, lng: 37.67612673120963, 
+          gallery: [
+            { img: 'assets/mov_ostr_mecht1.jpg', text: 'Это мы стоим в очереди на самый крутой аттракцион' },
+            { img: 'assets/mov_ostr_mecht2.jpg', text: 'Очень страшно, очобенно страшные были скелеты которые вылезали и пели' },
+            { img: 'assets/mov_ostr_mecht3.jpg', text: 'Тут мы стоим как самая крутая парочка' },
+            { img: 'assets/mov_ostr_mecht4.jpg', text: 'Тут мы еще не подозреваем что успеем посетить еще пару аттракционов и на один меня не пустят' },
+            { img: 'assets/mov_ostr_mecht5.jpg', text: 'В ресторане черепашек ниндзя, помню что нас тогда игнорили официанты пахап' },
+            
+          ]
+        },
+        { 
+          lat: 55.81958556731806, lng: 37.61170276897731, 
+          gallery: [
+            { img: 'assets/mov_ost1.jpg', text: 'Наконец то мы пришли к этой башне, помню что перед ней мы зашли покушать и ты хотела чего то сладенького, в итоге покушали макарунов' },
+            { img: 'assets/mov_ost2.jpg', text: 'Тут мы на фоне москоу стоим крутые с любимосью' },
+            { img: 'assets/mov_ost3.jpg', text: 'Тут мы довольные <3' },
+            { img: 'assets/mov_ost4.jpg', text: 'Наши ножки' },
+            { img: 'assets/mov_ost5.jpg', text: 'Видочек на москоу, блин я помню что там можно было выйти наверх и там было холодно и так страшно апххпапха' }
+            
+          ]
+        },
+        { 
+          lat: 55.75075219522594, lng: 37.537790536628926, 
+          gallery: [
+            { img: 'assets/mov_mov_city_8.jpg', text: 'Тут мы приехали в москоу сити и начинал идти дождь, мы еле как поняли куда идти чтобы покушать в теремке' },
+            { img: 'assets/mov_mov_city_9.jpg', text: 'Моя подглядность, на сайте не видно но ты там подглядываешь' }
+          ]
+        },
+        { 
+          lat: 55.763110509957414, lng: 37.582539219013746, 
+          gallery: [
+            { img: 'assets/mov_zoo1.jpg', text: 'ХАПХПА ну мне все еще смешно с его лица конечно' },
+            { img: 'assets/mov_zoo2.jpg', text: 'Обезьяности' },
+            { img: 'assets/mov_zoo3.jpg', text: 'Чеееей тооо затылочек' },
+            { img: 'assets/mov_zoo4.jpg', text: 'Журавлики' },
+            { img: 'assets/mov_zoo15.jpg', text: 'Ну тупо ты' },
+            { img: 'assets/mov_zoo16.jpg', text: 'Шо то пацык заснул' },
+            { img: 'assets/mov_zoo17.jpg', text: 'Медвежность' },
+            { img: 'assets/mov_zoo18.jpg', text: 'Ну это прям жеский пацык какой то' },
+            { img: 'assets/mov_zoo19.jpg', text: 'Это тупо мыыыыы' },
+            { img: 'assets/mov_zoo20.jpg', text: 'Видочек на москоу сити,ты тогда учила меня как надо фоткать' }
+          ]
+        },
+        { 
+          lat: 55.76295818148515, lng: 37.5769631908909, 
+          gallery: [
+            { img: 'assets/mov_zoo5.jpg', text: 'Иван к' },
+            { img: 'assets/mov_zoo6.jpg', text: 'Помню что надо было тебя поднимать чтобы ты увидела панду пхахапх' },
+            { img: 'assets/mov_zoo7.jpg', text: 'Рысь что ли' },
+            { img: 'assets/mov_zoo8.jpg', text: 'Совность' },
+            { img: 'assets/mov_zoo9.jpg', text: 'Цапляность' },
+            { img: 'assets/mov_zoo10.jpg', text: 'Моя цапляность' },
+            { img: 'assets/mov_zoo11.jpg', text: 'Пуингуины, помнюч что они грязыне какие то были' },
+            { img: 'assets/mov_zoo12.jpg', text: 'Слонность' },
+            { img: 'assets/mov_zoo13.jpg', text: 'Это мы купили сахарную вату потому что любимость захотела сладкого' },
+            { img: 'assets/mov_zoo14.jpg', text: 'Твоя мега фотка' },
+            { img: 'assets/mov_zoo21.jpg', text: 'ХАПХХАП жирность' },
+            { img: 'assets/mov_zoo22.jpg', text: 'Блин ты тут такая красивая просто слов нету, мне прям очень нравится' },
+            { img: 'assets/mov_zoo23.jpg', text: 'Опа пацанчик' },
+          ]
+        }
+        
+      ],
+      ekb: [
+        { 
+          lat: 56.84097423944247, lng: 60.64790253563939, 
+          gallery: [
+            { img: 'assets/ekb_g35a.jpg', text: 'Первая наша фотография сделанная в отношениях. В тот день мы смотрели пилу и впервые поцеловались.' },
+            { img: 'assets/ekb_g35a2.jpg', text: 'Тут мы сидим бурмалдим' },
+            { img: 'assets/ekb_g35a3.jpg', text: 'Это только апрель а как будто недавно было' },
+            { img: 'assets/ekb_g35a4.jpg', text: 'Тут тебя раскимарило а я кайфую в футболке зохи с любимостью' },
+            { img: 'assets/ekb_g35a5.jpg', text: 'Это мы лежим после моего приезда из москоу когда я ездил делать визу' },
+            { img: 'assets/ekb_g35a6.jpg', text: 'Рама обижености' },
+            { img: 'assets/ekb_g35a7.jpg', text: 'Перед турслетом' },
+            { img: 'assets/ekb_g35a8.jpg', text: 'Опять косичка от любимой' },
+            { img: 'assets/ekb_g35a9.jpg', text: 'Прогулочка по дендрарию когда у меня была аллергия жеская' },
+            { img: 'assets/ekb_g35a10.jpg', text: 'Ты с моими волосюшками' },
+            { img: 'assets/ekb_g35a11.jpg', text: 'Я с твоими волосюшками' },
+            { img: 'assets/ekb_g35a13.jpg', text: 'Это ты меня раздавила перед второй поездкой в москоу' },
+            { img: 'assets/ekb_g35a14.jpg', text: 'Тут у нас полгода наши, и мы кушаем вкусные клубники' },
+            { img: 'assets/ekb_g35a15.jpg', text: 'Люблю тебя солнце мое' },
+            { img: 'assets/ekb_g35a16.jpg', text: 'Мой самурай' },
+          ]
+        },
+        { 
+          lat: 56.841695615009115, lng: 60.6448209342697, 
+          gallery: [
+            { img: 'assets/ekb_g35a12.jpg', text: 'Моя подглядность' },
+            { img: 'assets/ekb_dom_leri1.jpg', text: 'Ваня дмитриенко на твоем др' },
+            { img: 'assets/ekb_dom_leri2.jpg', text: 'Болтаем' },
+            { img: 'assets/ekb_dom_leri3.jpg', text: 'Есссс дррр лбимой <3' }
+          ]
+        },
+        { 
+          lat: 56.816933982879014, lng: 60.53846124749221, 
+          gallery: [
+            { img: 'assets/ekb_raduga1.jpg', text: 'Тут мы приехали жеско работать в радугу' },
+            { img: 'assets/ekb_raduga2.jpg', text: 'Тут тебя с чего то поравло ахпахазап' },
+            { img: 'assets/ekb_raduga3.jpg', text: 'Ты потно раздаешь листовки' },
+            { img: 'assets/ekb_raduga4.jpg', text: 'Трудяга' },
+            { img: 'assets/ekb_raduga5.jpg', text: 'Кепность' },
+            { img: 'assets/ekb_raduga6.jpg', text: 'Мы блин работаем' },
+            { img: 'assets/ekb_raduga7.jpg', text: 'Шо то присела' },
+            { img: 'assets/ekb_raduga8.jpg', text: 'Работаю не покладая рук' }
+          ]
+        },
+        { 
+          lat: 56.82892946257447, lng: 60.59905697335455, 
+          gallery: [
+            { img: 'assets/ekb_green1.jpg', text: 'Тут мы пришли смотреть одиссею, но на самом деле мы тут в Амстердаме' },
+          ]
+        }
+        
+      ]
+    };
+
+    const cityMapContainer = document.getElementById('city-map-container');
+    const backBtn = document.getElementById('back-btn');
+    const hint = document.getElementById('hint');
+    let cityMap = null;
+    let isFlying = false;
+    let activePopup = null;
+
+    // ==== ГЛОБУС ====
+    const globe = new CoreGlobe.Globe({
+      container: document.getElementById('globe'),
+      dataBaseUrl: 'https://cdn.jsdelivr.net/npm/core-globe/dist/data/',
+      config: { autoRotate: true },
+      onMarkerClick: (id) => {
+        const city = CITIES.find(c => c.id === id);
+        if (city) goToCity(city);
+      }
+    });
+
+    CITIES.forEach(c => globe.addMarker({ id: c.id, lat: c.lat, lng: c.lng, style: 'current' }));
+
+    async function goToCity(city) {
+      if (isFlying) return;
+      isFlying = true;
+      
+      globe.setAutoRotate(false);
+      hint.classList.add('hidden');
+
+      await globe.animateFlight({ lat: city.lat, lng: city.lng });
+      
+      let frames = 0;
+      const fixCamera = () => {
+        if (frames < 10) {
+          if (globe.camera) { globe.camera.position.z = 3.8; globe.camera.updateProjectionMatrix(); }
+          frames++;
+          requestAnimationFrame(fixCamera);
+        }
+      };
+      requestAnimationFrame(fixCamera);
+
+      showCityMap(city.id);
+      isFlying = false;
+    }
+
+    function showCityMap(cityId) {
+      if (cityMap) {
+        cityMap.remove();
+        cityMap = null;
+        activePopup = null;
+      }
+
+      cityMapContainer.classList.add('visible');
+      backBtn.classList.add('visible');
+
+      const places = CITY_PLACES[cityId] || [];
+      const center = places.length > 0 ? [places[0].lat, places[0].lng] : [55.7558, 37.6173];
+
+      cityMap = L.map('city-map', { zoomControl: false, attributionControl: false }).setView(center, 14);
+
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 16
+      }).addTo(cityMap);
+
+      cityMap.on('click', () => {
+        window.closeActivePopup();
+      });
+
+      const customIcon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="width:14px; height:14px; background:#fff; border-radius:50%; border:2px solid #0a0a0a; box-shadow:0 0 10px rgba(255,255,255,0.6);"></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      });
+
+      places.forEach(place => {
+        const marker = L.marker([place.lat, place.lng], { icon: customIcon }).addTo(cityMap);
+        
+        marker.on('click', (e) => {
+          L.DomEvent.stopPropagation(e); 
+          
+          if (activePopup) {
+            activePopup.classList.remove('active');
+            const oldPopup = activePopup;
+            setTimeout(() => { if(oldPopup) oldPopup.remove(); }, 300);
+          }
+
+          let galleryHtml = '';
+          place.gallery.forEach(item => {
+            galleryHtml += `
+              <div class="bubble-item">
+                <img src="${item.img}" loading="lazy">
+                <div class="bubble-text">${item.text}</div>
+              </div>
+            `;
+          });
+
+          const popupContent = `
+            <button class="bubble-close" onclick="closeActivePopup()">✕</button>
+            <div class="bubble-gallery">${galleryHtml}</div>
+          `;
+
+          const popup = L.popup({
+            className: 'transparent-popup',
+            closeButton: false,
+            offset: [0, -10],
+            autoPan: true,
+            minWidth: 260,
+            maxWidth: 260
+          })
+          .setLatLng([place.lat, place.lng])
+          .setContent(`<div class="map-popup-bubble">${popupContent}</div>`)
+          .openOn(cityMap);
+
+          setTimeout(() => {
+            const popupElement = document.querySelector('.map-popup-bubble');
+            if (popupElement) {
+              popupElement.classList.add('active');
+              activePopup = popupElement;
+              
+              if (cityMap) {
+                cityMap.invalidateSize();
+              }
+            }
+          }, 10);
+        });
+      });
+
+      if (places.length > 1) {
+        const bounds = L.latLngBounds(places.map(p => [p.lat, p.lng]));
+        cityMap.fitBounds(bounds, { padding: [80, 80] });
+      }
+    }
+
+    window.closeActivePopup = function() {
+      if (activePopup) {
+        activePopup.classList.remove('active');
+        const oldPopup = activePopup;
+        setTimeout(() => { if(oldPopup) oldPopup.remove(); }, 300);
+        activePopup = null;
+      }
+    };
+
+    backBtn.addEventListener('click', () => {
+      window.closeActivePopup();
+      cityMapContainer.classList.remove('visible');
+      backBtn.classList.remove('visible');
+      
+      if (globe.camera) {
+        const startZ = globe.camera.position.z;
+        const targetZ = 8.0;
+        const duration = 500;
+        const startTime = performance.now();
+        
+        function animateOut(now) {
+          const progress = Math.min((now - startTime) / duration, 1);
+          globe.camera.position.z = startZ + (targetZ - startZ) * progress;
+          if (progress < 1) requestAnimationFrame(animateOut);
+        }
+        requestAnimationFrame(animateOut);
+      }
+      
+      setTimeout(() => {
+        globe.setAutoRotate(true);
+        hint.classList.remove('hidden');
+      }, 500);
+    });
+  </script>
+</body>
+</html>
